@@ -32,3 +32,24 @@ def test_spot_checkpoint_saves():
     res = pricing.spot_checkpoint_cost(100, 1.5, 2.5)
     assert res["spot_cost"] < res["on_demand_cost"]
     assert res["savings_pct"] > 0
+
+
+def test_cache_is_worth_it():
+    # High volume, good hit rate -> worth it
+    res = pricing.cache_is_worth_it(1000, 0.3, 0.10, 2.50, 1000)
+    assert res["is_worth_it"] is True
+    assert res["break_even_requests"] == 4444.0
+    assert res["savings_per_month"] == 20.25
+
+    # Zero hit rate -> not worth it
+    res = pricing.cache_is_worth_it(1000, 0.0, 0.10, 2.50, 1000)
+    assert res["is_worth_it"] is False
+    assert res["break_even_requests"] == float("inf")
+
+    # Hit rate 1.0 -> not worth it (edge case)
+    res = pricing.cache_is_worth_it(1000, 1.0, 0.10, 2.50, 1000)
+    assert res["is_worth_it"] is False
+
+    # Low volume, low hit rate -> not worth it
+    res = pricing.cache_is_worth_it(10, 0.1, 0.50, 2.50, 1000)
+    assert res["is_worth_it"] is False

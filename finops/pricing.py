@@ -77,6 +77,80 @@ def recommend_tier(hours_per_day: float, interruptible: bool, reserved_discount:
     return "on_demand"
 
 
+def cache_is_worth_it(
+    avg_requests_per_day: float,
+    cache_hit_rate: float,
+    cache_storage_cost_per_gb_day: float,
+    inference_cost_per_1m_tokens: float,
+    avg_tokens_per_request: int,
+) -> dict:
+    """Cache break-even analysis: should you enable prompt caching?
+
+    Args:
+        avg_requests_per_day: Average daily request volume
+        cache_hit_rate: Fraction of requests served from cache (0.0-1.0)
+        cache_storage_cost_per_gb_day: Storage cost for cached prompts
+        inference_cost_per_1m_tokens: Non-cached inference cost per 1M tokens
+        avg_tokens_per_request: Average tokens per request (input)
+
+    Returns:
+        dict with break_even_requests, is_worth_it boolean, savings_per_month
+    """
+    if cache_hit_rate <= 0 or cache_hit_rate >= 1.0:
+        return {
+            "break_even_requests": float("inf"),
+            "is_worth_it": False,
+            "savings_per_month": 0.0,
+        }
+
+    cache_discount = 0.10  # cached reads cost 10% of normal
+    daily_requests = avg_requests_per_day
+    monthly_requests = daily_requests * 30
+
+    # Daily cost without caching
+    daily_inference_cost = (avg_tokens_per_request / 1e6) * inference_cost_per_1m_tokens * daily_requests
+
+    # Daily cost with caching
+    cached_requests = daily_requests * cache_hit_rate
+    uncached_requests = daily_requests * (1 - cache_hit_rate)
+    daily_cost_with_cache = (
+        (avg_tokens_per_request / 1e6) * inference_cost_per_1m_tokens * uncached_requests
+        + (avg_tokens_per_request / 1e6) * inference_cost_per_1m_tokens * cache_discount * cached_requests
+    )
+
+    # Daily savings from caching
+    daily_savings = daily_inference_cost - daily_cost_with_cache
+
+    # Break-even: savings per day = storage cost per day
+    # => daily_savings / cache_hit_rate * X = storage_cost * X (per request)
+    # Simplified: savings per cached request = tokens * cost * (1 - discount)
+    savings_per_cached_request = (
+        (avg_tokens_per_request / 1e6) * inference_cost_per_1m_tokens * (1 - cache_discount)
+    )
+
+    if savings_per_cached_request <= 0:
+        break_even_requests = float("inf")
+        is_worth_it = False
+    else:
+        # Break-even: total savings = storage cost
+        # Per day: cached_requests * savings_per_request = storage_cost
+        # cached_requests = daily_requests * cache_hit_rate
+        # break_even_daily_requests = cache_storage_cost / (savings_per_request * cache_hit_rate)
+        break_even_daily_requests = cache_storage_cost_per_gb_day / (savings_per_cached_request * cache_hit_rate)
+        break_even_requests = break_even_daily_requests * 30  # monthly break-even
+
+        # Break-even point in total requests needed to justify cache investment
+        is_worth_it = daily_savings >= cache_storage_cost_per_gb_day
+
+    savings_per_month = daily_savings * 30 if daily_savings > 0 else 0.0
+
+    return {
+        "break_even_requests": round(break_even_requests, 0),
+        "is_worth_it": bool(is_worth_it),
+        "savings_per_month": round(savings_per_month, 2),
+    }
+
+
 def spot_checkpoint_cost(
     job_hours: float,
     spot_hr: float,
